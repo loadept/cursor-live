@@ -74,6 +74,10 @@ func main() {
 		events:    make(chan *Event),
 		broadcast: make(chan *Message),
 	}
+	defer func() {
+		close(wsServer.events)
+		close(wsServer.broadcast)
+	}()
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		data := map[string]any{
@@ -105,8 +109,6 @@ func main() {
 	if err := httpServer.Shutdown(shutCtx); err != nil {
 		log.Fatal(err)
 	}
-	close(wsServer.events)
-	close(wsServer.broadcast)
 }
 
 func getEnv(key, def string) string {
