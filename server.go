@@ -31,7 +31,7 @@ type Event struct {
 type Message struct {
 	ConnID  string `json:"conn_id"`
 	Payload struct {
-		Username  string `json:"username"`
+		Label     string `json:"label"`
 		Timestamp string `json:"timestamp"`
 		Color     string `json:"color"`
 		X         int    `json:"x"`
@@ -47,9 +47,9 @@ type Server struct {
 	broadcast chan *Message
 }
 
-//go:embed template/index.html
+//go:embed template/index.tmpl
 var index embed.FS
-var tmpl = template.Must(template.ParseFS(index, "template/index.html"))
+var tmpl = template.Must(template.ParseFS(index, "template/index.tmpl"))
 
 func main() {
 	log.SetFlags(0)
