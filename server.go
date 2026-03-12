@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -15,12 +16,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
+	ws "github.com/gorilla/websocket"
 )
 
 type Client struct {
+	Addr   string
 	ConnID string
-	Conn   *websocket.Conn
+	Conn   *ws.Conn
 }
 
 type Event struct {
@@ -40,7 +42,7 @@ type Message struct {
 }
 
 type Server struct {
-	upgrader  *websocket.Upgrader
+	upgrader  *ws.Upgrader
 	mutex     sync.Mutex
 	clients   map[*Client]bool
 	events    chan *Event
@@ -61,7 +63,7 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	upgrader := &websocket.Upgrader{
+	upgrader := &ws.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
 			return origin == "https://live.loadept.com" || origin == "https://loadept.com"
@@ -119,7 +121,31 @@ func getEnv(key, def string) string {
 	return env
 }
 
+var (
+	logMu sync.Mutex
+	enc   = json.NewEncoder(os.Stdout)
+)
+
+func writeLog(le *logEntry) {
+	logMu.Lock()
+	defer logMu.Unlock()
+	enc.Encode(le)
+}
+
+type logEntry struct {
+	Timestamp string `json:"timestamp,omitempty"`
+	Addr      string `json:"addr,omitempty"`
+	ConnID    string `json:"client_id,omitempty"`
+	Event     string `json:"event,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 func (s *Server) wsHandler(w http.ResponseWriter, r *http.Request) {
+	ip := r.Header.Get("CF-Connecting-IP")
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -127,41 +153,52 @@ func (s *Server) wsHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	id := uuid.New().String()
-	client := &Client{Conn: conn, ConnID: id}
+	client := &Client{Addr: ip, ConnID: id, Conn: conn}
+
+	writeLog(&logEntry{
+		Timestamp: time.Now().Format(time.RFC3339),
+		Addr:      client.Addr,
+		ConnID:    client.ConnID,
+		Event:     "a user has connected",
+	})
 
 	s.mutex.Lock()
 	s.clients[client] = true
 	s.mutex.Unlock()
 
+	var le *logEntry
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			s.mutex.Lock()
-			delete(s.clients, client)
-			s.mutex.Unlock()
-
-			client.Conn.Close()
-			s.events <- &Event{Type: "disconnected", ConnID: client.ConnID}
+			if ws.IsCloseError(err, ws.CloseNormalClosure, ws.CloseGoingAway) {
+				le = &logEntry{Event: "user disconnected cleanly"}
+			} else {
+				le = &logEntry{Error: fmt.Sprintf("message reading failed: %v", err)}
+			}
 			break
 		}
 
 		var msg Message
 		if err := json.Unmarshal(message, &msg); err != nil {
-			errMsg := []byte(`{"detail": "malformed data, connection closed"}`)
-			client.Conn.WriteMessage(websocket.TextMessage, errMsg)
-
-			s.mutex.Lock()
-			delete(s.clients, client)
-			s.mutex.Unlock()
-
-			client.Conn.Close()
-			s.events <- &Event{Type: "disconnected", ConnID: client.ConnID}
+			le = &logEntry{Error: fmt.Sprintf("message decoding failed: %v", err)}
+			client.Conn.WriteMessage(ws.TextMessage, []byte(`{"detail": "malformed data, connection closed"}`))
 			break
 		}
-		msg.ConnID = client.ConnID
 
+		msg.ConnID = client.ConnID
 		s.broadcast <- &msg
 	}
+
+	le.Timestamp = time.Now().Format(time.RFC3339)
+	le.Addr = client.Addr
+	le.ConnID = client.ConnID
+	writeLog(le)
+
+	s.mutex.Lock()
+	delete(s.clients, client)
+	s.mutex.Unlock()
+
+	s.events <- &Event{Type: "disconnected", ConnID: client.ConnID}
 }
 
 func (s *Server) msgsHandler() {
@@ -192,7 +229,14 @@ func (s *Server) broadcastAll(senderID string, data any) {
 			continue
 		}
 
-		if err := client.Conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+		if err := client.Conn.WriteMessage(ws.TextMessage, raw); err != nil {
+			writeLog(&logEntry{
+				Timestamp: time.Now().Format(time.RFC3339),
+				Addr:      client.Addr,
+				ConnID:    client.ConnID,
+				Error:     fmt.Sprintf("write message failed: %v", err),
+			})
+
 			client.Conn.Close()
 			delete(s.clients, client)
 		}
