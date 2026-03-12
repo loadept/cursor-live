@@ -135,7 +135,7 @@ func writeLog(le *logEntry) {
 type logEntry struct {
 	Timestamp string `json:"timestamp,omitempty"`
 	Addr      string `json:"addr,omitempty"`
-	ConnID    string `json:"client_id,omitempty"`
+	ConnID    string `json:"conn_id,omitempty"`
 	Event     string `json:"event,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
