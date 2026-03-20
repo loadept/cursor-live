@@ -44,6 +44,7 @@ type Message struct {
 type Server struct {
 	upgrader  *ws.Upgrader
 	mutex     sync.Mutex
+	wg        sync.WaitGroup
 	clients   map[*Client]bool
 	events    chan *Event
 	broadcast chan *Message
@@ -79,6 +80,7 @@ func main() {
 		broadcast: make(chan *Message),
 	}
 	defer func() {
+		wsServer.wg.Wait()
 		close(wsServer.events)
 		close(wsServer.broadcast)
 	}()
@@ -143,6 +145,9 @@ type logEntry struct {
 }
 
 func (s *Server) wsHandler(w http.ResponseWriter, r *http.Request) {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
 	ip := r.Header.Get("CF-Connecting-IP")
 	if ip == "" {
 		ip = r.RemoteAddr
@@ -222,10 +227,10 @@ func (s *Server) msgsHandler() {
 
 func (s *Server) broadcastAll(senderID string, data any) {
 	raw, _ := json.Marshal(data)
-
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	var toRemove []*Client
 	for client := range s.clients {
 		if client.ConnID == senderID {
 			continue
@@ -240,7 +245,11 @@ func (s *Server) broadcastAll(senderID string, data any) {
 			})
 
 			client.Conn.Close()
-			delete(s.clients, client)
+			toRemove = append(toRemove, client)
 		}
+	}
+
+	for _, client := range toRemove {
+		delete(s.clients, client)
 	}
 }
