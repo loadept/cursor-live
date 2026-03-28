@@ -1,4 +1,4 @@
-# live.loadept.com
+# live.cursor
 
 A websocket server to interact with people and play games with the mouse.
 
