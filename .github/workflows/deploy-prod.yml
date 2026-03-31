@@ -1,15 +1,11 @@
 name: Deploy to Production Server
 
 on:
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - README.md
-      - LICENSE
-      - AGENTS.md
-      - docs/**
-      - .gitignore
+  workflow_run:
+    workflows:
+      - Build and Push Docker Image
+    types:
+      - completed
 
 jobs:
   deploy-on-server:
